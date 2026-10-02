@@ -141,7 +141,7 @@ STATE_FILE_DIR_ERROR: str = (
 LOGIN_ACCESS_TOKEN_ERROR: str = "Failed to login with access token: '{}'"
 
 # Retry configuration for transient server-side errors returned by the SDK.
-SECRET_LOOKUP_MAX_ATTEMPTS: int = 6
+SECRET_LOOKUP_MAX_ATTEMPTS: int = 10
 SECRET_LOOKUP_RETRY_DELAY_SECONDS: float = .5
 HTTP_5XX_ERROR_REGEX = re.compile(
     r"(?:\[(5\d{2})\]|\bHTTP(?:/\d(?:\.\d)?)?\s+(5\d{2})\b|\bstatus(?:\s+code)?\D+(5\d{2})\b)",
