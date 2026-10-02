@@ -77,6 +77,8 @@ _list:
 
 import base64
 import os
+import re
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 import uuid
@@ -134,6 +136,14 @@ STATE_FILE_DIR_ERROR: str = (
 )
 LOGIN_ACCESS_TOKEN_ERROR: str = "Failed to login with access token: '{}'"
 
+# Retry configuration for transient server-side errors returned by the SDK.
+SECRET_LOOKUP_MAX_ATTEMPTS: int = 3
+SECRET_LOOKUP_RETRY_DELAY_SECONDS: float = 1.0
+HTTP_5XX_ERROR_REGEX = re.compile(
+    r"(?:\[(5\d{2})\]|\bHTTP(?:/\d(?:\.\d)?)?\s+(5\d{2})\b|\bstatus(?:\s+code)?\D+(5\d{2})\b)",
+    re.IGNORECASE,
+)
+
 # warnings
 DEPRECATED_ACCESS_TOKEN_LOGIN_WARNING: str = (
     "Using older `access_token_login()` method. Please update to the latest version of bitwarden-sdk."
@@ -165,6 +175,15 @@ def is_valid_field(field: str) -> bool:
 def validate_url(url: str, url_type: str) -> None:
     if not is_url(url):
         raise AnsibleError(INVALID_URL_ERROR.format(url_type, url))
+
+
+def is_retryable_secret_lookup_error(error: Exception) -> bool:
+    """Return True when the SDK error appears to be an HTTP 5xx response."""
+    status_code = getattr(error, "status_code", None) or getattr(error, "status", None)
+    if isinstance(status_code, int) and 500 <= status_code <= 599:
+        return True
+
+    return HTTP_5XX_ERROR_REGEX.search(str(error)) is not None
 
 
 def create_state_dir(state_file_dir: str) -> Path:
@@ -403,11 +422,27 @@ class LookupModule(LookupBase):
             display.error(error_message)
             raise AnsibleError(error_message) from e
 
-        try:
-            secret: SecretResponse = client.secrets().get(secret_id)
-            secret_data: str = secret.to_dict()["data"][field]
-            return [secret_data]
-        except Exception as e:
-            error_message = SECRET_LOOKUP_ERROR.format(secret_id, e)
-            display.error(error_message)
-            raise AnsibleLookupError(error_message) from e
+        last_error = None
+        for attempt in range(1, SECRET_LOOKUP_MAX_ATTEMPTS + 1):
+            try:
+                secret: SecretResponse = client.secrets().get(secret_id)
+                secret_data: str = secret.to_dict()["data"][field]
+                return [secret_data]
+            except Exception as e:
+                last_error = e
+                if (
+                    attempt < SECRET_LOOKUP_MAX_ATTEMPTS
+                    and is_retryable_secret_lookup_error(e)
+                ):
+                    display.warning(
+                        "Secret lookup failed with a server error. "
+                        f"Retrying attempt {attempt + 1} of "
+                        f"{SECRET_LOOKUP_MAX_ATTEMPTS}: {e}"
+                    )
+                    time.sleep(SECRET_LOOKUP_RETRY_DELAY_SECONDS * attempt)
+                    continue
+                break
+
+        error_message = SECRET_LOOKUP_ERROR.format(secret_id, last_error)
+        display.error(error_message)
+        raise AnsibleLookupError(error_message) from last_error
