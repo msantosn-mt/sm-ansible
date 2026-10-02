@@ -132,6 +132,16 @@ class TestValidators(unittest.TestCase):
         error = Exception("Received error message from server: [404 Not Found]")
         self.assertFalse(is_retryable_secret_lookup_error(error))
 
+    def test_upstream_connect_error_is_retryable(self):
+        """upstream connect errors should be retried without an HTTP code"""
+        error = Exception("upstream connect error or disconnect/reset before headers")
+        self.assertTrue(is_retryable_secret_lookup_error(error))
+
+    def test_connection_timeout_is_retryable(self):
+        """connection timeouts should be retried without an HTTP code"""
+        error = Exception("reset reason: connection timeout")
+        self.assertTrue(is_retryable_secret_lookup_error(error))
+
     def test_secret_id_with_500_is_not_retryable(self):
         """UUIDs containing 500 should not be mistaken for server errors"""
         error = Exception(
